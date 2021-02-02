@@ -13,6 +13,6 @@ defmodule DistributedDb do
 
   """
   def hello do
-    :world
+    Node.connect(:"manager@192.168.1.13")
   end
 end
