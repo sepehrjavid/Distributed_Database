@@ -4,7 +4,6 @@ defmodule Peer do
     spawn(__MODULE__, :join, [])
   end
 
-
   def join() do
     send(:global.whereis_name(@manager_name), {:join, self()})
     receive do
@@ -12,7 +11,6 @@ defmodule Peer do
       {:ok, node_numbers, id, successor_data, predecessor_data} -> run(node_numbers, id, successor_data, predecessor_data)
     end
   end
-
 
   def run(node_numbers, id, nil, nil) do
     finger_updater_pid = spawn(__MODULE__, :finger_update_manager, [self(), node_numbers, id, nil, nil])
@@ -22,7 +20,6 @@ defmodule Peer do
     finger_updater_pid = spawn(__MODULE__, :finger_update_manager, [self(), node_numbers, id, successor_data, predecessor_data])
     loop([successor_data], node_numbers, id, successor_data, predecessor_data, finger_updater_pid)
   end
-
 
   def get_own_data(node_numbers, _, nil) do
     Enum.to_list(0..node_numbers - 1)
@@ -37,7 +34,6 @@ defmodule Peer do
       true -> Enum.to_list(elem(predecessor_data, 0) + 1..id)
     end
   end
-
 
   def finger_update_manager(loop_pid, node_numbers, id, nil, nil) do
     receive do
@@ -72,7 +68,6 @@ defmodule Peer do
     end
   end
 
-
   def form_finger_table(current_finger_table, node_numbers, id, successor_data, predecessor_data, i) when Bitwise.<<<(1, i) < node_numbers do
     new_id = rem(id + Bitwise.<<<(1, i), node_numbers)
     peer_holding_data = get_own_data(node_numbers, id, predecessor_data)
@@ -91,7 +86,6 @@ defmodule Peer do
     current_finger_table
   end
 
-
   def update_finger_table(loop_pid, node_numbers, id, successor_data, predecessor_data) do
     new_finger_table = [successor_data]
     new_finger_table = form_finger_table(new_finger_table, node_numbers, id, successor_data, predecessor_data, 1)
@@ -99,7 +93,6 @@ defmodule Peer do
     IO.puts("Finger Table Update Done")
     send(loop_pid, {:update_finger_table, new_finger_table})
   end
-
 
   def normalize_known_ids(_, [], searching_id, node_numbers, acc, true) do
     {Enum.reverse(acc), searching_id + node_numbers}
@@ -114,7 +107,6 @@ defmodule Peer do
     normalize_known_ids(head, tail, searching_id, node_numbers, [head | acc], flag)
   end
 
-
   def find_next_hop(nil, [head | _], normalized_searching_id) when normalized_searching_id <= head do
     head
   end
@@ -128,12 +120,10 @@ defmodule Peer do
     find_next_hop(head, tail, normalized_searching_id)
   end
 
-
   def find_path_to_id(known_ids, searching_id, node_numbers) do
     {normalized_keys, normalized_searching_id} = normalize_known_ids(hd(known_ids), tl(known_ids), searching_id, node_numbers, [hd(known_ids)], false)
     find_next_hop(nil, normalized_keys, normalized_searching_id)
   end
-
 
   def find_key(finger_table, target_key, pid, id, node_numbers, predecessor_data, loop_pid, nil) do
     peer_holding_data = get_own_data(node_numbers, id, predecessor_data)
@@ -143,7 +133,6 @@ defmodule Peer do
       length(finger_keys_list) == 0 -> send(pid, {:not_found})
       true ->
         next_hop_id = rem(find_path_to_id(finger_keys_list, target_key, node_numbers), node_numbers)
-        IO.puts(inspect next_hop_id)
         next_hop_data = Enum.filter(finger_table, fn x -> elem(x, 0) == next_hop_id end)
         send(elem(hd(next_hop_data), 1), {:find_key, target_key, pid, [id]})
     end
@@ -156,12 +145,10 @@ defmodule Peer do
       length(finger_keys_list) == 0 -> send(pid, {:not_found})
       true ->
         next_hop_id = rem(find_path_to_id(finger_keys_list, target_key, node_numbers), node_numbers)
-        IO.puts(inspect next_hop_id)
         next_hop_data = Enum.filter(finger_table, fn x -> elem(x, 0) == next_hop_id end)
         send(elem(hd(next_hop_data), 1), {:find_key, target_key, pid, [id | source_ids]})
     end
   end
-
 
   def leave_chord(id, successor_data, predecessor_data, finger_updater_pid, pid) do
     send(finger_updater_pid, {:stop})
@@ -170,7 +157,6 @@ defmodule Peer do
       {:exited} -> send(pid, {:ok})
     end
   end
-
 
   def loop(finger_table, node_numbers, id, successor_data, predecessor_data, finger_updater_pid) do
     receive do
@@ -195,7 +181,6 @@ defmodule Peer do
       {:leave_chord, pid} -> leave_chord(id, successor_data, predecessor_data, finger_updater_pid, pid)
     end
   end
-
 
   def find(target_key, pid) do
     send(pid, {:find_key, target_key, self(), nil})
