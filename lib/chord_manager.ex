@@ -75,12 +75,9 @@ defmodule ChordManager do
     new_active_nodes = Map.delete(active_nodes, id)
     cond do
       map_size(new_active_nodes) == 1 ->
-        IO.puts("one left")
-        IO.puts(inspect successor)
         advertise_successor(nil, nil, elem(predecessor, 1))
         advertise_predecessor(nil, nil, elem(successor, 1))
       map_size(new_active_nodes) > 1 ->
-        IO.puts("advertized")
         advertise_successor(elem(successor, 0), elem(successor, 1), elem(predecessor, 1))
         advertise_predecessor(elem(predecessor, 0), elem(predecessor, 1), elem(successor, 1))
     end
@@ -89,10 +86,10 @@ defmodule ChordManager do
   end
 
   def loop(active_nodes, node_numbers) do
+    IO.puts("Active Nodes are #{inspect active_nodes}")
     receive do
       {:join, pid} ->
         new_active_nodes = join(active_nodes, pid, node_numbers)
-        IO.puts(inspect new_active_nodes)
         loop(new_active_nodes, node_numbers)
       {:leave, pid, id, successor, predecessor} ->
         new_active_nodes = leave(active_nodes, pid, id, successor, predecessor)

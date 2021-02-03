@@ -8,15 +8,20 @@ defmodule Peer do
     send(:global.whereis_name(@manager_name), {:join, self()})
     receive do
       {:reject} -> exit(self())
-      {:ok, node_numbers, id, successor_data, predecessor_data} -> run(node_numbers, id, successor_data, predecessor_data)
+      {:ok, node_numbers, id, successor_data, predecessor_data} ->
+        IO.puts("Obtained ID: #{id}")
+        run(node_numbers, id, successor_data, predecessor_data)
     end
   end
 
   def run(node_numbers, id, nil, nil) do
     finger_updater_pid = spawn(__MODULE__, :finger_update_manager, [self(), node_numbers, id, nil, nil])
+    IO.puts("I'm all alone in the network now :( but it's cool that I don't need to update my finger table")
     loop([], node_numbers, id, nil, nil, finger_updater_pid)
   end
   def run(node_numbers, id, successor_data, predecessor_data) do
+    IO.puts("Obtained Successor ID #{elem(successor_data, 0)}")
+    IO.puts("Obtained Predecessor ID #{elem(predecessor_data, 0)}")
     finger_updater_pid = spawn(__MODULE__, :finger_update_manager, [self(), node_numbers, id, successor_data, predecessor_data])
     loop([successor_data], node_numbers, id, successor_data, predecessor_data, finger_updater_pid)
   end
@@ -161,19 +166,22 @@ defmodule Peer do
   def loop(finger_table, node_numbers, id, successor_data, predecessor_data, finger_updater_pid) do
     receive do
       {:update_finger_table, new_finger_table} ->
-        IO.puts("New Finger Table is #{inspect finger_table}")
+        IO.puts("The new finger table is #{inspect finger_table}")
         loop(new_finger_table, node_numbers, id, successor_data, predecessor_data, finger_updater_pid)
       {:new_successor, nil, nil} ->
+        IO.puts("I'm all alone in the network now :( but it's cool that I don't need to update my finger table")
         send(finger_updater_pid, {:update_successor, nil})
         loop(finger_table, node_numbers, id, nil, predecessor_data, finger_updater_pid)
       {:new_successor, successor_id, successor_pid} ->
         send(finger_updater_pid, {:update_successor, {successor_id, successor_pid}})
+        IO.puts("New successor recognized with ID #{successor_id}}")
         loop(finger_table, node_numbers, id, {successor_id, successor_pid}, predecessor_data, finger_updater_pid)
       {:new_predecessor, nil, nil} ->
         send(finger_updater_pid, {:update_predecessor, nil})
         loop(finger_table, node_numbers, id, successor_data, nil, finger_updater_pid)
       {:new_predecessor, predecessor_id, predecessor_pid} ->
         send(finger_updater_pid, {:update_predecessor, {predecessor_id, predecessor_pid}})
+        IO.puts("New predecessor recognized with ID #{predecessor_id}}")
         loop(finger_table, node_numbers, id, successor_data, {predecessor_id, predecessor_pid}, finger_updater_pid)
       {:find_key, target_key, pid, source_ids} ->
         find_key(finger_table, target_key, pid, id, node_numbers, predecessor_data, self(), source_ids)
