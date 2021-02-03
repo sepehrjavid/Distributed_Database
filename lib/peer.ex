@@ -7,23 +7,30 @@ defmodule Peer do
   def join() do
     send(:global.whereis_name(@manager_name), {:join, self()})
     receive do
-      {:reject} -> exit(self())
-      {:ok, node_numbers, id, successor_data, predecessor_data} ->
+      {:reject} ->
+        IO.puts("Oops, the network seems full!")
+        exit(self())
+      {:ok, node_numbers, id, successor_data, predecessor_data, holding_data} ->
         IO.puts("Obtained ID: #{id}")
-        run(node_numbers, id, successor_data, predecessor_data)
+        run(node_numbers, id, successor_data, predecessor_data, holding_data)
     end
   end
 
-  def run(node_numbers, id, nil, nil) do
+  def run(node_numbers, id, nil, nil, holding_data) do
     finger_updater_pid = spawn(__MODULE__, :finger_update_manager, [self(), node_numbers, id, nil, nil])
+    IO.puts("Currently holding #{inspect holding_data} as data")
     IO.puts("I'm all alone in the network now :( but it's cool that I don't need to update my finger table")
-    loop([], node_numbers, id, nil, nil, finger_updater_pid)
+    loop([], node_numbers, id, nil, nil, finger_updater_pid, holding_data)
   end
-  def run(node_numbers, id, successor_data, predecessor_data) do
+  def run(node_numbers, id, successor_data, predecessor_data, nil) do
     IO.puts("Obtained Successor ID #{elem(successor_data, 0)}")
     IO.puts("Obtained Predecessor ID #{elem(predecessor_data, 0)}")
-    finger_updater_pid = spawn(__MODULE__, :finger_update_manager, [self(), node_numbers, id, successor_data, predecessor_data])
-    loop([successor_data], node_numbers, id, successor_data, predecessor_data, finger_updater_pid)
+    receive do
+      {:recieve_own_data, holding_data} ->
+        IO.puts("Currently holding #{inspect holding_data} as data")
+        finger_updater_pid = spawn(__MODULE__, :finger_update_manager, [self(), node_numbers, id, successor_data, predecessor_data])
+        loop([successor_data], node_numbers, id, successor_data, predecessor_data, finger_updater_pid, holding_data)
+    end
   end
 
   def get_own_data(node_numbers, _, nil) do
@@ -81,7 +88,7 @@ defmodule Peer do
       true ->
         send(elem(successor_data, 1), {:find_key, new_id, self(), [id]})
         receive do
-          {:found_id, peer_data} -> form_finger_table([peer_data | current_finger_table], node_numbers, id, successor_data, predecessor_data, i + 1)
+          {:found_id, peer_data, _} -> form_finger_table([peer_data | current_finger_table], node_numbers, id, successor_data, predecessor_data, i + 1)
           {:not_found} -> form_finger_table(current_finger_table, node_numbers, id, successor_data, predecessor_data, i + 1)
         after 2000 -> form_finger_table(current_finger_table, node_numbers, id, successor_data, predecessor_data, i + 1)
         end
@@ -130,11 +137,11 @@ defmodule Peer do
     find_next_hop(nil, normalized_keys, normalized_searching_id)
   end
 
-  def find_key(finger_table, target_key, pid, id, node_numbers, predecessor_data, loop_pid, nil) do
+  def find_key(finger_table, target_key, pid, id, node_numbers, predecessor_data, loop_pid, nil, holding_data) do
     peer_holding_data = get_own_data(node_numbers, id, predecessor_data)
     finger_keys_list = Enum.map(finger_table, fn x -> elem(x, 0) end)
     cond do
-      target_key in peer_holding_data -> send(pid, {:found_id, {id, loop_pid}})
+      target_key in peer_holding_data -> validate_with_holding_data(pid, id, loop_pid, holding_data, target_key)
       length(finger_keys_list) == 0 -> send(pid, {:not_found})
       true ->
         next_hop_id = rem(find_path_to_id(finger_keys_list, target_key, node_numbers), node_numbers)
@@ -142,11 +149,11 @@ defmodule Peer do
         send(elem(hd(next_hop_data), 1), {:find_key, target_key, pid, [id]})
     end
   end
-  def find_key(finger_table, target_key, pid, id, node_numbers, predecessor_data, loop_pid, source_ids) do
+  def find_key(finger_table, target_key, pid, id, node_numbers, predecessor_data, loop_pid, source_ids, holding_data) do
     peer_holding_data = get_own_data(node_numbers, id, predecessor_data)
     finger_keys_list = Enum.filter(Enum.map(finger_table, fn x -> elem(x, 0) end), fn x -> x not in source_ids end)
     cond do
-      target_key in peer_holding_data -> send(pid, {:found_id, {id, loop_pid}})
+      target_key in peer_holding_data -> validate_with_holding_data(pid, id, loop_pid, holding_data, target_key)
       length(finger_keys_list) == 0 -> send(pid, {:not_found})
       true ->
         next_hop_id = rem(find_path_to_id(finger_keys_list, target_key, node_numbers), node_numbers)
@@ -155,46 +162,76 @@ defmodule Peer do
     end
   end
 
-  def leave_chord(id, successor_data, predecessor_data, finger_updater_pid, pid) do
+  def validate_with_holding_data(pid, id, loop_pid, holding_data, target_key) do
+    cond do
+      target_key in holding_data -> send(pid, {:found_id, {id, loop_pid}, :exists})
+      true -> send(pid, {:found_id, {id, loop_pid}, :not_exists})
+    end
+  end
+
+  def leave_chord(id, successor_data, predecessor_data, finger_updater_pid, pid, holding_data) do
     send(finger_updater_pid, {:stop})
-    send(:global.whereis_name(@manager_name), {:leave, self(), id, successor_data, predecessor_data})
+    cond do
+      successor_data != nil ->
+        send(elem(successor_data, 1), {:recieve_own_data, holding_data})
+        send(:global.whereis_name(@manager_name), {:leave, self(), id, successor_data, predecessor_data})
+      true -> send(:global.whereis_name(@manager_name), {:leave, self(), id, successor_data, predecessor_data})
+    end
     receive do
       {:exited} -> send(pid, {:ok})
     end
   end
 
-  def loop(finger_table, node_numbers, id, successor_data, predecessor_data, finger_updater_pid) do
+  def update_predecessor_data(node_numbers, own_id, predecessor_id, predecessor_pid, holding_data) do
+    own_valid_data = get_own_data(node_numbers, own_id, {predecessor_id, predecessor_pid})
+    predecessor_holding_data = holding_data -- own_valid_data
+    cond do
+      length(predecessor_holding_data) != 0 ->
+        send(predecessor_pid, {:recieve_own_data, predecessor_holding_data})
+        holding_data -- predecessor_holding_data
+      true -> holding_data
+    end
+  end
+
+  def loop(finger_table, node_numbers, id, successor_data, predecessor_data, finger_updater_pid, holding_data) do
     receive do
       {:update_finger_table, new_finger_table} ->
         IO.puts("The new finger table is #{inspect finger_table}")
-        loop(new_finger_table, node_numbers, id, successor_data, predecessor_data, finger_updater_pid)
+        loop(new_finger_table, node_numbers, id, successor_data, predecessor_data, finger_updater_pid, holding_data)
       {:new_successor, nil, nil} ->
         IO.puts("I'm all alone in the network now :( but it's cool that I don't need to update my finger table")
         send(finger_updater_pid, {:update_successor, nil})
-        loop(finger_table, node_numbers, id, nil, predecessor_data, finger_updater_pid)
+        loop(finger_table, node_numbers, id, nil, predecessor_data, finger_updater_pid, holding_data)
       {:new_successor, successor_id, successor_pid} ->
         send(finger_updater_pid, {:update_successor, {successor_id, successor_pid}})
         IO.puts("New successor recognized with ID #{successor_id}}")
-        loop(finger_table, node_numbers, id, {successor_id, successor_pid}, predecessor_data, finger_updater_pid)
+        loop(finger_table, node_numbers, id, {successor_id, successor_pid}, predecessor_data, finger_updater_pid, holding_data)
       {:new_predecessor, nil, nil} ->
         send(finger_updater_pid, {:update_predecessor, nil})
-        loop(finger_table, node_numbers, id, successor_data, nil, finger_updater_pid)
+        loop(finger_table, node_numbers, id, successor_data, nil, finger_updater_pid, holding_data)
       {:new_predecessor, predecessor_id, predecessor_pid} ->
         send(finger_updater_pid, {:update_predecessor, {predecessor_id, predecessor_pid}})
+        new_holding_data = update_predecessor_data(node_numbers, id, predecessor_id, predecessor_pid, holding_data)
         IO.puts("New predecessor recognized with ID #{predecessor_id}}")
-        loop(finger_table, node_numbers, id, successor_data, {predecessor_id, predecessor_pid}, finger_updater_pid)
+        IO.puts("Currently holding #{inspect new_holding_data} as data")
+        loop(finger_table, node_numbers, id, successor_data, {predecessor_id, predecessor_pid}, finger_updater_pid, new_holding_data)
       {:find_key, target_key, pid, source_ids} ->
-        find_key(finger_table, target_key, pid, id, node_numbers, predecessor_data, self(), source_ids)
-        loop(finger_table, node_numbers, id, successor_data, predecessor_data, finger_updater_pid)
-      {:leave_chord, pid} -> leave_chord(id, successor_data, predecessor_data, finger_updater_pid, pid)
+        find_key(finger_table, target_key, pid, id, node_numbers, predecessor_data, self(), source_ids, holding_data)
+        loop(finger_table, node_numbers, id, successor_data, predecessor_data, finger_updater_pid, holding_data)
+      {:recieve_own_data, adding_holding_data} ->
+        new_holding_data = Enum.sort(adding_holding_data ++ holding_data)
+        IO.puts("Currently holding #{inspect new_holding_data} as data")
+        loop(finger_table, node_numbers, id, successor_data, predecessor_data, finger_updater_pid, new_holding_data)
+      {:leave_chord, pid} -> leave_chord(id, successor_data, predecessor_data, finger_updater_pid, pid, holding_data)
     end
   end
 
   def find(target_key, pid) do
     send(pid, {:find_key, target_key, self(), nil})
     receive do
-      {:found_id, peer_data} -> IO.puts("Key #{target_key} found under ID #{elem(peer_data, 0)}")
-      {:not_found} -> IO.puts("Key not found. may be due to network unstability")
+      {:found_id, peer_data, :exists} -> IO.puts("Data with key #{target_key} found under ID #{elem(peer_data, 0)}")
+      {:found_id, peer_data, :not_exists} -> IO.puts("Data with key #{target_key} does not exist under ID #{elem(peer_data, 0)}")
+      {:not_found} -> IO.puts("Key not found. may be due to network instability")
       {:time_out} -> IO.puts("Connection timeout")
     end
   end
